@@ -2,6 +2,7 @@ package com.example.pesoCabal.rest;
 
 import com.example.pesoCabal.model.Cuenta;
 import com.example.pesoCabal.model.DetalleCuenta;
+import com.example.pesoCabal.dto.CuentaDTO; // Importar la interfaz de proyección
 import com.example.pesoCabal.repository.CuentaRepository;
 import com.example.pesoCabal.repository.DetalleCuentaRepository;
 import com.example.pesoCabal.service.BeneficioService;
@@ -26,8 +27,9 @@ public class BeneficioREST {
     private BeneficioService beneficioService;
 
     @GetMapping("/cuentas")
-    public List<Cuenta> listarCuentas() {
-        return cuentaRepo.findByEliminadoFalse();
+    public List<CuentaDTO> listarCuentas() {
+        // Cambiamos el método original por el que hace el JOIN dinámico
+        return cuentaRepo.findByEliminadoFalseWithAgricultor();
     }
 
     @GetMapping("/cuentas/{noCuenta}/detalles")
