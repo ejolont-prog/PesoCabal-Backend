@@ -51,6 +51,9 @@ public class BeneficioREST {
         return detalleRepo.findByNocuentaAndEliminadoFalse(noCuenta);
     }
     // 3. ACCIÓN PRINCIPAL: "Actualizar Peso" (Formulario de Báscula) con Automatismo de Estado 30 y Cálculos de Tolerancia
+
+
+    // 3. ACCIÓN PRINCIPAL: "Actualizar Peso" (Formulario de Báscula) con Automatismo de Estado 30, Cálculos y Sincronización con Agricultor
     @PostMapping("/detalles/{id}/pesar")
     public ResponseEntity<?> pesarParcialidad(@PathVariable Integer id, @RequestBody Map<String, Object> payload) {
         try {
@@ -110,7 +113,7 @@ public class BeneficioREST {
             detalleRepo.save(detalle);
 
             // =========================================================================
-            // 🔥 AUTOMATISMO EN BACKEND: VERIFICACIÓN, CAMBIO A ESTADO 30 Y CÁLCULOS
+            // AUTOMATISMO EN BACKEND: VERIFICACIÓN, CAMBIO A ESTADO 30 Y CÁLCULOS
             // =========================================================================
             String noCuentaAsociada = detalle.getNocuenta();
 
@@ -124,7 +127,7 @@ public class BeneficioREST {
             // Si ya no quedan camiones/parcialidades pendientes (conteo es 0)
             if (pendientes != null && pendientes == 0) {
 
-                // 📊 A) Obtener el peso total esperado de la cuenta madre
+                // A) Obtener el peso total esperado de la cuenta madre
                 String sqlGetEsperado = "SELECT pesototalesperado FROM beneficio.cuentas WHERE nocuenta = ? LIMIT 1";
                 BigDecimal pesoTotalEsperado = jdbcTemplate.queryForObject(sqlGetEsperado, BigDecimal.class, noCuentaAsociada);
 
@@ -132,16 +135,16 @@ public class BeneficioREST {
                     pesoTotalEsperado = BigDecimal.ZERO;
                 }
 
-                // 📊 B) Sumar todos los pesos reales guardados en los detalles de esta cuenta
+                // B) Sumar todos los pesos reales guardados en los detalles de esta cuenta
                 String sqlSumRecibido = "SELECT COALESCE(SUM(pesorecibido), 0) FROM beneficio.detallecuenta WHERE nocuenta = ? AND eliminado = false";
                 BigDecimal pesoTotalRecibido = jdbcTemplate.queryForObject(sqlSumRecibido, BigDecimal.class, noCuentaAsociada);
 
-                // 📊 C) Operaciones matemáticas precisas con BigDecimal (Tolerancia del 5%)
+                // C) Operaciones matemáticas precisas con BigDecimal (Tolerancia del 5%)
                 BigDecimal porcentajeTolerancia = new BigDecimal("0.05");
                 BigDecimal toleranciaCalculada = pesoTotalEsperado.multiply(porcentajeTolerancia); // +/- 5%
                 BigDecimal diferenciaTotal = pesoTotalRecibido.subtract(pesoTotalEsperado);         // Recibido - Esperado
 
-                // 📊 D) Definir etiqueta según el rango de tolerancia
+                // D) Definir etiqueta según el rango de tolerancia
                 String resultadoToleranciaLabel = "Aceptado, en parametro";
 
                 // Si la diferencia es menor que el negativo de la tolerancia -> Faltante crítico
@@ -153,7 +156,7 @@ public class BeneficioREST {
                     resultadoToleranciaLabel = "Sobrante";
                 }
 
-                // 📊 E) UPDATE masivo de la cuenta con los campos numéricos calculados y el nuevo Estado (30)
+                // E) UPDATE masivo de la cuenta en Beneficio con los cálculos y el Estado (30)
                 String sqlUpdateCuentaCalculos = "UPDATE beneficio.cuentas SET " +
                         "estadopesaje = 30, " +
                         "pesototalrecibido = ?, " +
@@ -170,7 +173,40 @@ public class BeneficioREST {
                         noCuentaAsociada
                 );
 
-                mensajeExtra = " Todas las parcialidades completadas. Cuenta actualizada automáticamente a 'Pesaje Finalizado' con estatus: [" + resultadoToleranciaLabel + "].";
+                mensajeExtra = " Todas las parcialidades completadas. Cuenta actualizada en Beneficio a 'Pesaje Finalizado' [" + resultadoToleranciaLabel + "].";
+
+                // =========================================================================
+                // NOTIFICAR AL BACKEND DEL AGRICULTOR VIA HTTP (CAMBIO A ESTADO 167)
+                // =========================================================================
+                try {
+                    org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+
+                    // Cambia esta URL por el puerto/ruta real del backend del Agricultor
+                    String urlAgricultor = "http://localhost:8081/api/agricultor/cuentas/actualizar-estado";
+
+                    // Armamos el JSON payload dinámico con el nocuenta obtenido y el ID de estado solicitado
+                    Map<String, Object> requestAgricultor = new HashMap<>();
+                    requestAgricultor.put("nocuenta", noCuentaAsociada);
+                    requestAgricultor.put("estado", 167);
+
+                    // Configurar encabezados HTTP estándar
+                    org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                    headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+
+                    org.springframework.http.HttpEntity<Map<String, Object>> entity = new org.springframework.http.HttpEntity<>(requestAgricultor, headers);
+
+                    // Se envía la petición via POST
+                    org.springframework.http.ResponseEntity<String> respuestaApi = restTemplate.postForEntity(urlAgricultor, entity, String.class);
+
+                    if (respuestaApi.getStatusCode().is2xxSuccessful()) {
+                        mensajeExtra += " Sincronizado exitosamente con Agricultor (Estado 167).";
+                    }
+                } catch (Exception httpEx) {
+                    // Al estar en bloques try-catch separados, si el API de agricultor está apagada,
+                    // el pesaje local del beneficio de igual forma se guardará con éxito.
+                    mensajeExtra += " Advertencia: No se pudo conectar con el módulo de Agricultor para actualizar al estado 167 (" + httpEx.getMessage() + ").";
+                }
+                // =========================================================================
             }
             // =========================================================================
 
