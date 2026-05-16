@@ -16,6 +16,10 @@ public class Cuenta {
     @Column(name = "nocuenta")
     private String noCuenta;
 
+    // Cambia esto en tu archivo Cuenta.java:
+    @Column(name = "unidadpeso") // 🚀 Corregido según tu columna #11 de la BD
+    private Integer idUnidadPeso;
+
     private String nitagricultor;
     private Integer estado; // 1: Creada, 2: Pesaje Iniciado, 3: Finalizado
     private String tipocuenta;
