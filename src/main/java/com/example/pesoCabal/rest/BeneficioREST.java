@@ -50,8 +50,7 @@ public class BeneficioREST {
     public List<DetalleCuenta> listarDetalles(@PathVariable String noCuenta) {
         return detalleRepo.findByNocuentaAndEliminadoFalse(noCuenta);
     }
-
-    // 3. ACCIÓN PRINCIPAL: "Actualizar Peso" (Formulario de Báscula) con Automatismo de Estado 30
+    // 3. ACCIÓN PRINCIPAL: "Actualizar Peso" (Formulario de Báscula) con Automatismo de Estado 30 y Cálculos de Tolerancia
     @PostMapping("/detalles/{id}/pesar")
     public ResponseEntity<?> pesarParcialidad(@PathVariable Integer id, @RequestBody Map<String, Object> payload) {
         try {
@@ -111,11 +110,11 @@ public class BeneficioREST {
             detalleRepo.save(detalle);
 
             // =========================================================================
-            // 🔥 AUTOMATISMO EN BACKEND: VERIFICACIÓN Y CAMBIO A ESTADO "FINALIZADO" (30)
+            // 🔥 AUTOMATISMO EN BACKEND: VERIFICACIÓN, CAMBIO A ESTADO 30 Y CÁLCULOS
             // =========================================================================
             String noCuentaAsociada = detalle.getNocuenta();
 
-            // Consultamos si quedan parcialidades de esta misma cuenta sin pesar (con estadopesaje diferente a 100 o nulo)
+            // Consultamos si quedan parcialidades de esta misma cuenta sin pesar
             String sqlContarPendientes = "SELECT COUNT(*) FROM beneficio.detallecuenta " +
                     "WHERE nocuenta = ? AND (estadopesaje IS NULL OR estadopesaje != 100) AND eliminado = false";
 
@@ -124,10 +123,54 @@ public class BeneficioREST {
             String mensajeExtra = "";
             // Si ya no quedan camiones/parcialidades pendientes (conteo es 0)
             if (pendientes != null && pendientes == 0) {
-                // Ejecutamos el UPDATE automático a la tabla de cuentas madre usando el nocuenta
-                String sqlUpdateCuentaEstado = "UPDATE beneficio.cuentas SET estadopesaje = 30 WHERE nocuenta = ?";
-                jdbcTemplate.update(sqlUpdateCuentaEstado, noCuentaAsociada);
-                mensajeExtra = " Todas las parcialidades han sido completadas. La cuenta cambió automáticamente a 'Pesaje Finalizado'.";
+
+                // 📊 A) Obtener el peso total esperado de la cuenta madre
+                String sqlGetEsperado = "SELECT pesototalesperado FROM beneficio.cuentas WHERE nocuenta = ? LIMIT 1";
+                BigDecimal pesoTotalEsperado = jdbcTemplate.queryForObject(sqlGetEsperado, BigDecimal.class, noCuentaAsociada);
+
+                if (pesoTotalEsperado == null) {
+                    pesoTotalEsperado = BigDecimal.ZERO;
+                }
+
+                // 📊 B) Sumar todos los pesos reales guardados en los detalles de esta cuenta
+                String sqlSumRecibido = "SELECT COALESCE(SUM(pesorecibido), 0) FROM beneficio.detallecuenta WHERE nocuenta = ? AND eliminado = false";
+                BigDecimal pesoTotalRecibido = jdbcTemplate.queryForObject(sqlSumRecibido, BigDecimal.class, noCuentaAsociada);
+
+                // 📊 C) Operaciones matemáticas precisas con BigDecimal (Tolerancia del 5%)
+                BigDecimal porcentajeTolerancia = new BigDecimal("0.05");
+                BigDecimal toleranciaCalculada = pesoTotalEsperado.multiply(porcentajeTolerancia); // +/- 5%
+                BigDecimal diferenciaTotal = pesoTotalRecibido.subtract(pesoTotalEsperado);         // Recibido - Esperado
+
+                // 📊 D) Definir etiqueta según el rango de tolerancia
+                String resultadoToleranciaLabel = "Aceptado, en parametro";
+
+                // Si la diferencia es menor que el negativo de la tolerancia -> Faltante crítico
+                if (diferenciaTotal.compareTo(toleranciaCalculada.negate()) < 0) {
+                    resultadoToleranciaLabel = "Faltante";
+                }
+                // Si la diferencia es mayor que la tolerancia positiva -> Sobrante crítico
+                else if (diferenciaTotal.compareTo(toleranciaCalculada) > 0) {
+                    resultadoToleranciaLabel = "Sobrante";
+                }
+
+                // 📊 E) UPDATE masivo de la cuenta con los campos numéricos calculados y el nuevo Estado (30)
+                String sqlUpdateCuentaCalculos = "UPDATE beneficio.cuentas SET " +
+                        "estadopesaje = 30, " +
+                        "pesototalrecibido = ?, " +
+                        "diferenciatotal = ?, " +
+                        "tolerancia = ?, " +
+                        "resultadotolerancia = ? " +
+                        "WHERE nocuenta = ?";
+
+                jdbcTemplate.update(sqlUpdateCuentaCalculos,
+                        pesoTotalRecibido,
+                        diferenciaTotal,
+                        toleranciaCalculada,
+                        resultadoToleranciaLabel,
+                        noCuentaAsociada
+                );
+
+                mensajeExtra = " Todas las parcialidades completadas. Cuenta actualizada automáticamente a 'Pesaje Finalizado' con estatus: [" + resultadoToleranciaLabel + "].";
             }
             // =========================================================================
 
