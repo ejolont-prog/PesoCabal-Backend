@@ -20,10 +20,13 @@ public class DetalleCuenta {
 
     private BigDecimal pesoestimado; // Lo que dice el agricultor
     private BigDecimal pesorecibido; // LO QUE DICE LA BÁSCULA (Se llena en beneficio)
-
+    private String textorechazado; // Mapea la columna A-Z textorechazado de la base de datos
     private Integer estado;
     private Integer estadopesaje;
 
+
+
+    private String observaciones;   // Guardará el comentario libre de la báscula
     private LocalDateTime fecharecepcion;
     private Boolean eliminado = false;
 

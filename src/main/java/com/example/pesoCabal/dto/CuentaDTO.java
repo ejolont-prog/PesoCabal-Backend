@@ -5,16 +5,14 @@ import java.time.LocalDateTime;
 
 public interface CuentaDTO {
     Long getIdcuenta();
-    String getNoCuenta();
+    String getNocuenta();            // 🚀 Cambiado a minúsculas para acoplarse a Postgres
     String getNitagricultor();
-    BigDecimal getPesoTotalEsperado();
-    LocalDateTime getFechaCreacion();
-    Integer getIdEstadoPesaje();
+    BigDecimal getPesototalesperado(); // 🚀 Cambiado a minúsculas
+    LocalDateTime getFechacreacion();   // 🚀 Cambiado a minúsculas
+    Integer getIdestadopesaje();       // 🚀 Cambiado a minúsculas
 
-    // Aquí mapeamos la razón social de la tabla de agricultores
-    String getNombreAgricultor();
-
-
-    String getEstadoNombre();     // Detalle del catálogo
-    Integer getCantParcialidades();
+    String getNombreagricultor();      // 🚀 Cambiado a minúsculas
+    String getEstadonombre();          // 🚀 Cambiado a minúsculas
+    Integer getCantparcialidades();    // 🚀 Cambiado a minúsculas
+    String getUnidadpesonombre();      // 🚀 Cambiado a minúsculas
 }
