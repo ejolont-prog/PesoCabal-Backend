@@ -48,7 +48,8 @@ public class BeneficioREST {
     // 2. PANTALLA DE DETALLE (Vista de Parcialidades por No. Cuenta)
     @GetMapping("/cuentas/{noCuenta}/detalles")
     public List<DetalleCuenta> listarDetalles(@PathVariable String noCuenta) {
-        return detalleRepo.findByNocuentaAndEliminadoFalse(noCuenta);
+        // Cambiamos al nuevo metodo que excluye el estado 67
+        return detalleRepo.findDetallesValidosParaBeneficio(noCuenta);
     }
     // 3. ACCIÓN PRINCIPAL: "Actualizar Peso" (Formulario de Báscula) con Automatismo de Estado 30 y Cálculos de Tolerancia
 
@@ -90,11 +91,24 @@ public class BeneficioREST {
             Integer idEstadoActual = (Integer) resultadoCuenta.get("estadopesaje");
             String estadoNombreActual = (String) resultadoCuenta.get("detallecatalogo");
 
-            // Validar si el estado es nulo o si no corresponde a Pesaje Iniciado (29) o Finalizado (30)
-            if (idEstadoActual == null || (idEstadoActual != 29 && idEstadoActual != 30)) {
-                String nombreMostrar = (estadoNombreActual != null) ? estadoNombreActual : "Desconocido";
-                return ResponseEntity.badRequest().body("{\"error\": \"La cuenta se encuentra en estado: " + nombreMostrar + " no es posible ingresar pesajes.\"}");
+            // =========================================================================
+            // VALIDACIÓN CORREGIDA: Control estricto de transiciones de estado
+            // =========================================================================
+            if (idEstadoActual == null) {
+                return ResponseEntity.badRequest().body("{\"error\": \"La cuenta no posee un estado válido asignado.\"}");
             }
+
+            // Bloqueo directo si la cuenta ya fue cerrada previamente por otra parcialidad
+            if (idEstadoActual == 30) {
+                return ResponseEntity.badRequest().body("{\"error\": \"Acción bloqueada: El pesaje global de esta cuenta ya ha sido finalizado.\"}");
+            }
+
+            // Si no es Pesaje Iniciado (29), rechazamos cualquier inserción física de peso
+            if (idEstadoActual != 29) {
+                String nombreMostrar = (estadoNombreActual != null) ? estadoNombreActual : "Desconocido";
+                return ResponseEntity.badRequest().body("{\"error\": \"La cuenta se encuentra en estado: " + nombreMostrar + ". Solo se pueden pesar cuentas en 'Pesaje Iniciado'.\"}");
+            }
+            // =========================================================================
 
             // PROCESAMIENTO Y PERSISTENCIA (Campos físicos de la tabla)
             detalle.setPesorecibido(pesoObtenido);
@@ -117,9 +131,11 @@ public class BeneficioREST {
             // =========================================================================
             String noCuentaAsociada = detalle.getNocuenta();
 
-            // Consultamos si quedan parcialidades de esta misma cuenta sin pesar
+// Consultamos si quedan parcialidades de esta misma cuenta sin pesar (excluyendo Pesados 100 y Rechazados/Especiales 68)
             String sqlContarPendientes = "SELECT COUNT(*) FROM beneficio.detallecuenta " +
-                    "WHERE nocuenta = ? AND (estadopesaje IS NULL OR estadopesaje != 100) AND eliminado = false";
+                    "WHERE nocuenta = ? " +
+                    "AND (estadopesaje IS NULL OR estadopesaje NOT IN (100, 68)) " +
+                    "AND eliminado = false";
 
             Long pendientes = jdbcTemplate.queryForObject(sqlContarPendientes, Long.class, noCuentaAsociada);
 
