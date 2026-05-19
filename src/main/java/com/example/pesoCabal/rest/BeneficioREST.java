@@ -78,10 +78,6 @@ public class BeneficioREST {
         return detalleRepo.findDetallesValidosParaBeneficio(noCuenta);
     }
 
-    // =========================================================================
-    // 3. PESAR — guarda en detallecuenta Y en pesocabal.pesajecabal
-    // =========================================================================
-
     @PostMapping("/detalles/{id}/pesar")
     @Transactional
     public ResponseEntity<?> pesarParcialidad(@PathVariable Integer id, @RequestBody Map<String, Object> payload) {
@@ -130,7 +126,9 @@ public class BeneficioREST {
             detalle.setTextorechazado("Pesaje Realizado");
             detalle.setObservaciones(observacionesForm);
             detalle.setFecharecepcion(LocalDateTime.now());
-            detalleRepo.save(detalle);
+
+            // 🔥 CORRECCIÓN AQUÍ: Forzar la escritura en la BD para que el JdbcTemplate lo pueda leer correctamente
+            detalleRepo.saveAndFlush(detalle);
 
             // =========================================================================
             // INSERT EN pesocabal.pesajecabal con los datos capturados del formulario
@@ -248,6 +246,7 @@ public class BeneficioREST {
             return ResponseEntity.internalServerError().body("{\"error\": \"Error en el proceso de pesaje: " + e.getMessage() + "\"}");
         }
     }
+
 
     // =========================================================================
     // 4. BOLETA — Solo consulta y devuelve datos para impresión, NO inserta nada
