@@ -303,17 +303,20 @@ public class BeneficioREST {
     @GetMapping("/pesajes-realizados")
     public ResponseEntity<?> listarPesajesRealizados() {
         try {
-            // Corregido: cambiamos 'modificadorpor' por 'modificadopor'
-            String sql = "SELECT idpesajecabal AS idpesajecabal, " +
-                    "nocuenta AS nocuenta, " +
-                    "parcialidad AS parcialidad, " +
-                    "pesoobtenido AS pesoobtenido, " +
-                    "idunidadmedida AS idunidadmedida, " +
-                    "fechapesaje AS fechapesaje, " +
-                    "observaciones AS observaciones, " +
-                    "creadopor AS creadopor, " +
-                    "modificadopor AS modificadopor " +
-                    "FROM pesocabal.pesajecabal ORDER BY idpesajecabal DESC";
+            // Hacemos un JOIN entre el esquema pesocabal y beneficio para traer el detalle de la unidad
+            String sql = "SELECT p.idpesajecabal AS idpesajecabal, " +
+                    "p.nocuenta AS nocuenta, " +
+                    "p.parcialidad AS parcialidad, " +
+                    "p.pesoobtenido AS pesoobtenido, " +
+                    "p.idunidadmedida AS idunidadmedida, " +
+                    "c.detallecatalogo AS unidadmedidanombre, " + // <-- Traemos el nombre real de la medida
+                    "p.fechapesaje AS fechapesaje, " +
+                    "p.observaciones AS observaciones, " +
+                    "p.creadopor AS creadopor, " +
+                    "p.modificadopor AS modificadopor " +
+                    "FROM pesocabal.pesajecabal p " +
+                    "LEFT JOIN beneficio.catalogos c ON p.idunidadmedida = c.id " + // <-- El cruce de tablas
+                    "ORDER BY p.idpesajecabal DESC";
 
             List<Map<String, Object>> pesajes = jdbcTemplate.queryForList(sql);
             return ResponseEntity.ok(pesajes);
