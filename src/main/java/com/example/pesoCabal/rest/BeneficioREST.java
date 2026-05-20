@@ -298,4 +298,29 @@ public class BeneficioREST {
             return ResponseEntity.internalServerError().body("{\"error\": \"Error al generar la boleta: " + e.getMessage() + "\"}");
         }
     }
+
+
+    @GetMapping("/pesajes-realizados")
+    public ResponseEntity<?> listarPesajesRealizados() {
+        try {
+            // Corregido: cambiamos 'modificadorpor' por 'modificadopor'
+            String sql = "SELECT idpesajecabal AS idpesajecabal, " +
+                    "nocuenta AS nocuenta, " +
+                    "parcialidad AS parcialidad, " +
+                    "pesoobtenido AS pesoobtenido, " +
+                    "idunidadmedida AS idunidadmedida, " +
+                    "fechapesaje AS fechapesaje, " +
+                    "observaciones AS observaciones, " +
+                    "creadopor AS creadopor, " +
+                    "modificadopor AS modificadopor " +
+                    "FROM pesocabal.pesajecabal ORDER BY idpesajecabal DESC";
+
+            List<Map<String, Object>> pesajes = jdbcTemplate.queryForList(sql);
+            return ResponseEntity.ok(pesajes);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError()
+                    .body("{\"error\": \"Error al obtener el listado de pesajes: " + e.getMessage() + "\"}");
+        }
+    }
 }
