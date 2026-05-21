@@ -78,6 +78,8 @@ public class BeneficioREST {
         return detalleRepo.findDetallesValidosParaBeneficio(noCuenta);
     }
 
+
+/*
     @PostMapping("/detalles/{id}/pesar")
     @Transactional
     public ResponseEntity<?> pesarParcialidad(@PathVariable Integer id, @RequestBody Map<String, Object> payload) {
@@ -127,7 +129,7 @@ public class BeneficioREST {
             detalle.setObservaciones(observacionesForm);
             detalle.setFecharecepcion(LocalDateTime.now());
 
-            // 🔥 CORRECCIÓN AQUÍ: Forzar la escritura en la BD para que el JdbcTemplate lo pueda leer correctamente
+            // Forzar la escritura en la BD para que el JdbcTemplate lo pueda leer correctamente
             detalleRepo.saveAndFlush(detalle);
 
             // =========================================================================
@@ -140,6 +142,209 @@ public class BeneficioREST {
 
             if (yaExiste == null || yaExiste == 0) {
                 // Resolver unidad de medida: usar la del formulario, si falla usar la de la cuenta madre
+                Integer idUnidadFinal;
+                try {
+                    idUnidadFinal = Integer.parseInt(tipoMedida);
+                } catch (NumberFormatException nfe) {
+                    String sqlUnidad = "SELECT idunidadpeso FROM beneficio.cuentas WHERE nocuenta = ? LIMIT 1";
+                    Long idUnidadMadre = jdbcTemplate.queryForObject(sqlUnidad, Long.class, detalle.getNocuenta());
+                    idUnidadFinal = (idUnidadMadre != null) ? idUnidadMadre.intValue() : 1;
+                }
+
+                String sqlInsert = "INSERT INTO pesocabal.pesajecabal " +
+                        "(nocuenta, parcialidad, pesoobtenido, idunidadmedida, fechapesaje, observaciones, creadopor) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+                jdbcTemplate.update(sqlInsert,
+                        detalle.getNocuenta(),
+                        parcialidadIdStr,
+                        pesoObtenido,
+                        idUnidadFinal,
+                        LocalDate.now(),
+                        observacionesForm.isEmpty() ? "Sin observaciones" : observacionesForm,
+                        3
+                );
+            }
+            // =========================================================================
+
+            // =========================================================================
+            // AUTOMATISMO: CIERRE DE CUENTA SI YA NO HAY PARCIALIDADES PENDIENTES
+            // =========================================================================
+            String noCuentaAsociada = detalle.getNocuenta();
+
+            String sqlContarPendientes = "SELECT COUNT(*) FROM beneficio.detallecuenta " +
+                    "WHERE nocuenta = ? " +
+                    "AND (estadopesaje IS NULL OR estadopesaje NOT IN (100, 68)) " +
+                    "AND eliminado = false";
+            Long pendientes = jdbcTemplate.queryForObject(sqlContarPendientes, Long.class, noCuentaAsociada);
+
+            String mensajeExtra = "";
+            if (pendientes != null && pendientes == 0) {
+
+                String sqlGetEsperado = "SELECT pesototalesperado FROM beneficio.cuentas WHERE nocuenta = ? LIMIT 1";
+                BigDecimal pesoTotalEsperado = jdbcTemplate.queryForObject(sqlGetEsperado, BigDecimal.class, noCuentaAsociada);
+                if (pesoTotalEsperado == null) pesoTotalEsperado = BigDecimal.ZERO;
+
+                String sqlSumRecibido = "SELECT COALESCE(SUM(pesorecibido), 0) FROM beneficio.detallecuenta WHERE nocuenta = ? AND eliminado = false";
+                BigDecimal pesoTotalRecibido = jdbcTemplate.queryForObject(sqlSumRecibido, BigDecimal.class, noCuentaAsociada);
+
+                BigDecimal porcentajeTolerancia = new BigDecimal("0.05");
+                BigDecimal toleranciaCalculada = pesoTotalEsperado.multiply(porcentajeTolerancia);
+                BigDecimal diferenciaTotal = pesoTotalRecibido.subtract(pesoTotalEsperado);
+
+                String resultadoToleranciaLabel = "Aceptado, en parametro";
+                if (diferenciaTotal.compareTo(toleranciaCalculada.negate()) < 0) {
+                    resultadoToleranciaLabel = "Faltante";
+                } else if (diferenciaTotal.compareTo(toleranciaCalculada) > 0) {
+                    resultadoToleranciaLabel = "Sobrante";
+                }
+
+                String sqlUpdateCuenta = "UPDATE beneficio.cuentas SET " +
+                        "estadopesaje = 30, " + // Estado 30: Pesaje Finalizado en Beneficio
+                        "pesototalrecibido = ?, " +
+                        "diferenciatotal = ?, " +
+                        "tolerancia = ?, " +
+                        "resultadotolerancia = ? " +
+                        "WHERE nocuenta = ?";
+
+                jdbcTemplate.update(sqlUpdateCuenta,
+                        pesoTotalRecibido,
+                        diferenciaTotal,
+                        toleranciaCalculada,
+                        resultadoToleranciaLabel,
+                        noCuentaAsociada
+                );
+
+                mensajeExtra = " Todas las parcialidades completadas. Cuenta actualizada a 'Pesaje Finalizado' [" + resultadoToleranciaLabel + "].";
+
+                try {
+                    org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+                    // 1. La URL debe apuntar al nuevo endpoint exclusivo
+                    String urlAgricultor = "http://localhost:8081/api/pesajes/cuentas/actualizar-finalizadopesaje";
+
+                    // 2. Las llaves del mapa deben ser idénticas a los campos de tu RecibirEstadoDTO
+                    Map<String, Object> requestAgricultor = new HashMap<>();
+                    requestAgricultor.put("noCuenta", noCuentaAsociada); // Con 'C' mayúscula
+                    requestAgricultor.put("detalleCatalogo", "Pesaje Finalizado");
+
+                    org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                    headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+
+                    org.springframework.http.HttpEntity<Map<String, Object>> entity =
+                            new org.springframework.http.HttpEntity<>(requestAgricultor, headers);
+
+                    org.springframework.http.ResponseEntity<String> respuestaApi =
+                            restTemplate.postForEntity(urlAgricultor, entity, String.class);
+
+                    if (respuestaApi.getStatusCode().is2xxSuccessful()) {
+                        mensajeExtra += " Sincronizado exitosamente con Agricultor.";
+                    }
+                } catch (Exception httpEx) {
+                    // Revisa tu consola de Beneficio para ver si saltó esta advertencia
+                    System.err.println("❌ Error al conectar con Agricultor: " + httpEx.getMessage());
+                    mensajeExtra += " Advertencia: No se pudo conectar con el módulo de Agricultor (" + httpEx.getMessage() + ").";
+                }
+            }
+
+            return ResponseEntity.ok("{\"mensaje\": \"Se actualizó con éxito el peso de la parcialidad." + mensajeExtra + "\"}");
+
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body("{\"error\": \"Error en el proceso de pesaje: " + e.getMessage() + "\"}");
+        }
+    }
+
+ */
+
+    @PostMapping("/detalles/{id}/pesar")
+    @Transactional
+    public ResponseEntity<?> pesarParcialidad(@PathVariable Integer id, @RequestBody Map<String, Object> payload) {
+        try {
+            if (payload.get("peso") == null) {
+                return ResponseEntity.badRequest().body("{\"error\": \"El peso obtenido es obligatorio.\"}");
+            }
+
+            BigDecimal pesoObtenido = new BigDecimal(payload.get("peso").toString());
+            String tipoMedida = payload.get("tipoMedida") != null ? payload.get("tipoMedida").toString() : "1";
+            String observacionesForm = payload.get("observaciones") != null ? payload.get("observaciones").toString() : "";
+
+            Optional<DetalleCuenta> detalleOpt = detalleRepo.findById(id);
+            if (detalleOpt.isEmpty()) {
+                return ResponseEntity.badRequest().body("{\"error\": \"No existe la parcialidad especificada.\"}");
+            }
+            DetalleCuenta detalle = detalleOpt.get();
+
+            // Verificar estado de la cuenta madre
+            String sqlCheck = "SELECT c.estadopesaje, cat.detallecatalogo FROM beneficio.cuentas c " +
+                    "LEFT JOIN beneficio.catalogos cat ON c.estadopesaje = cat.id WHERE c.nocuenta = ? LIMIT 1";
+            List<Map<String, Object>> resultados = jdbcTemplate.queryForList(sqlCheck, detalle.getNocuenta());
+
+            if (resultados.isEmpty()) {
+                return ResponseEntity.badRequest().body("{\"error\": \"No se encontró la cuenta principal asociada a este detalle.\"}");
+            }
+
+            Map<String, Object> resultadoCuenta = resultados.get(0);
+            Integer idEstadoActual = (Integer) resultadoCuenta.get("estadopesaje");
+            String estadoNombreActual = (String) resultadoCuenta.get("detallecatalogo");
+
+            if (idEstadoActual == null) {
+                return ResponseEntity.badRequest().body("{\"error\": \"La cuenta no posee un estado válido asignado.\"}");
+            }
+            if (idEstadoActual == 30) {
+                return ResponseEntity.badRequest().body("{\"error\": \"Acción bloqueada: El pesaje global de esta cuenta ya ha sido finalizado.\"}");
+            }
+            if (idEstadoActual != 29) {
+                String nombreMostrar = (estadoNombreActual != null) ? estadoNombreActual : "Desconocido";
+                return ResponseEntity.badRequest().body("{\"error\": \"La cuenta se encuentra en estado: " + nombreMostrar + ". Solo se pueden pesar cuentas en 'Pesaje Iniciado'.\"}");
+            }
+
+            // Guardar en detallecuenta
+            detalle.setPesorecibido(pesoObtenido);
+            detalle.setEstadopesaje(100);
+            detalle.setTextorechazado("Pesaje Realizado");
+            detalle.setObservaciones(observacionesForm);
+            detalle.setFecharecepcion(LocalDateTime.now());
+
+            // Forzar la escritura en la BD para que el JdbcTemplate lo pueda leer correctamente
+            detalleRepo.saveAndFlush(detalle);
+
+            // =========================================================================
+
+            String mensajeParcialidad = "";
+            try {
+                org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
+                String urlParcialidadPesada = "http://localhost:8081/api/externo/actualizar-parcialidad-pesado";
+
+                // Construimos el JSON Payload usando el NotificacionEstadoDTO
+                Map<String, Object> requestParcialidad = new HashMap<>();
+
+                // ⚡ AQUÍ ESTÁ EL CAMBIO: Enviamos 'noparcialidad' en lugar del id del detallecuenta
+                requestParcialidad.put("noparcialidad", String.valueOf(detalle.getNoparcialidad()));
+                requestParcialidad.put("resultado", "PESADO");
+
+                org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+
+                org.springframework.http.HttpEntity<Map<String, Object>> entity =
+                        new org.springframework.http.HttpEntity<>(requestParcialidad, headers);
+
+                // Enviamos la petición vía PUT
+                restTemplate.put(urlParcialidadPesada, entity);
+                mensajeParcialidad = " Parcialidad sincronizada como 'PESADO' en Agricultor.";
+            } catch (Exception e) {
+                System.err.println("❌ Error al sincronizar parcialidad pesada con Agricultor: " + e.getMessage());
+                mensajeParcialidad = " Advertencia: No se pudo notificar el estado 'PESADO' de la parcialidad (" + e.getMessage() + ").";
+            }
+            // =========================================================================
+
+            // =========================================================================
+            // INSERT EN pesocabal.pesajecabal con los datos capturados del formulario
+            // =========================================================================
+            String parcialidadIdStr = String.valueOf(detalle.getIddetallecuenta());
+
+            String sqlCheckDup = "SELECT COUNT(*) FROM pesocabal.pesajecabal WHERE nocuenta = ? AND parcialidad = ?";
+            Long yaExiste = jdbcTemplate.queryForObject(sqlCheckDup, Long.class, detalle.getNocuenta(), parcialidadIdStr);
+
+            if (yaExiste == null || yaExiste == 0) {
                 Integer idUnidadFinal;
                 try {
                     idUnidadFinal = Integer.parseInt(tipoMedida);
@@ -215,17 +420,17 @@ public class BeneficioREST {
 
                 mensajeExtra = " Todas las parcialidades completadas. Cuenta actualizada a 'Pesaje Finalizado' [" + resultadoToleranciaLabel + "].";
 
-                // Notificar al módulo Agricultor
                 try {
                     org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
-                    String urlAgricultor = "http://localhost:8081/api/agricultor/cuentas/actualizar-estado";
+                    String urlAgricultor = "http://localhost:8081/api/pesajes/cuentas/actualizar-finalizadopesaje";
 
                     Map<String, Object> requestAgricultor = new HashMap<>();
-                    requestAgricultor.put("nocuenta", noCuentaAsociada);
-                    requestAgricultor.put("estado", 167);
+                    requestAgricultor.put("noCuenta", noCuentaAsociada);
+                    requestAgricultor.put("detalleCatalogo", "Pesaje Finalizado");
 
                     org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
                     headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+
                     org.springframework.http.HttpEntity<Map<String, Object>> entity =
                             new org.springframework.http.HttpEntity<>(requestAgricultor, headers);
 
@@ -233,20 +438,20 @@ public class BeneficioREST {
                             restTemplate.postForEntity(urlAgricultor, entity, String.class);
 
                     if (respuestaApi.getStatusCode().is2xxSuccessful()) {
-                        mensajeExtra += " Sincronizado exitosamente con Agricultor (Estado 167).";
+                        mensajeExtra += " Sincronizado exitosamente con Agricultor (Cierre de cuenta).";
                     }
                 } catch (Exception httpEx) {
-                    mensajeExtra += " Advertencia: No se pudo conectar con el módulo de Agricultor (" + httpEx.getMessage() + ").";
+                    System.err.println("❌ Error al conectar el cierre con Agricultor: " + httpEx.getMessage());
+                    mensajeExtra += " Advertencia: No se pudo conectar el cierre con el módulo de Agricultor (" + httpEx.getMessage() + ").";
                 }
             }
 
-            return ResponseEntity.ok("{\"mensaje\": \"Se actualizó con éxito el peso de la parcialidad." + mensajeExtra + "\"}");
+            return ResponseEntity.ok("{\"mensaje\": \"Se actualizó con éxito el peso de la parcialidad." + mensajeParcialidad + mensajeExtra + "\"}");
 
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body("{\"error\": \"Error en el proceso de pesaje: " + e.getMessage() + "\"}");
         }
     }
-
 
     // =========================================================================
     // 4. BOLETA — Solo consulta y devuelve datos para impresión, NO inserta nada

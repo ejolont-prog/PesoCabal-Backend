@@ -10,6 +10,8 @@ public interface DetalleCuentaRepository extends JpaRepository<DetalleCuenta, In
 
     @Query("SELECT d FROM DetalleCuenta d WHERE d.nocuenta = :noCuenta " +
             "AND d.eliminado = false " +
-            "AND d.estadopesaje != 67")
+            "AND d.estadopesaje != 67" +
+            "AND d.estadopesaje !=68"
+    )
     List<DetalleCuenta> findDetallesValidosParaBeneficio(@Param("noCuenta") String noCuenta);
 }
